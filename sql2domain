@@ -1,0 +1,321 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+
+const args = process.argv.slice(2);
+let migrationPath = '';
+let sqlPath = '';
+let outDir = '';
+
+for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--migration' && i + 1 < args.length) {
+        migrationPath = args[++i];
+    } else if (args[i] === '--sql' && i + 1 < args.length) {
+        sqlPath = args[++i];
+    } else if (args[i] === '--outdir' && i + 1 < args.length) {
+        outDir = args[++i];
+    }
+}
+
+if (!migrationPath || !sqlPath || !outDir) {
+    console.error("Usage: sql2domain --migration <path> --sql <path> --outdir <path>");
+    process.exit(1);
+}
+
+let sqlContent = '';
+let tableName = '';
+let entityName = '';
+let featureName = '';
+let columns = [];
+
+try {
+    sqlContent = fs.readFileSync(sqlPath, 'utf8');
+    const tableRegex = /CREATE\s+TABLE\s+\[?([\w]+)\]?/i;
+    const tableMatch = sqlContent.match(tableRegex);
+
+    if (!tableMatch) {
+        console.error("Could not find a CREATE TABLE statement in the provided SQL file.");
+        process.exit(1);
+    }
+
+    tableName = tableMatch[1];
+
+    entityName = tableName;
+    if (entityName.endsWith('s')) {
+        entityName = entityName.slice(0, -1);
+    } else if (entityName.endsWith('ies')) {
+        entityName = entityName.slice(0, -3) + 'y';
+    }
+
+    featureName = entityName;
+    const commonSuffixes = ['Specification', 'Type', 'Category', 'Detail', 'Setting', 'Config'];
+    for (const suffix of commonSuffixes) {
+        if (featureName.endsWith(suffix) && featureName !== suffix) {
+            featureName = featureName.slice(0, -suffix.length);
+            break;
+        }
+    }
+
+    const createTableBodyMatch = sqlContent.match(/CREATE\s+TABLE\s+\[?[\w]+\]?\s*\(([\s\S]*?)\)\s*;/i);
+
+    if (createTableBodyMatch) {
+        const bodyLines = createTableBodyMatch[1].split(',').map(line => line.trim()).filter(line => line.length > 0);
+        for (let line of bodyLines) {
+            const colRegex = /^\[?([\w]+)\]?\s+([\w]+)(?:\(.*?\))?/i;
+            const colMatch = line.match(colRegex);
+            if (colMatch) {
+                const colName = colMatch[1];
+                const sqlType = colMatch[2].toUpperCase();
+
+                let csType = 'string';
+                if (['INT', 'BIGINT', 'SMALLINT', 'TINYINT'].includes(sqlType)) {
+                    csType = 'int';
+                    if (sqlType === 'BIGINT') csType = 'long';
+                    if (sqlType === 'SMALLINT') csType = 'short';
+                    if (sqlType === 'TINYINT') csType = 'byte';
+                } else if (['BIT'].includes(sqlType)) {
+                    csType = 'bool';
+                } else if (['DECIMAL', 'NUMERIC', 'MONEY'].includes(sqlType)) {
+                    csType = 'decimal';
+                } else if (['FLOAT', 'REAL'].includes(sqlType)) {
+                    csType = 'double';
+                } else if (['DATE', 'DATETIME', 'DATETIME2', 'SMALLDATETIME'].includes(sqlType)) {
+                    csType = 'DateTime';
+                } else if (['UNIQUEIDENTIFIER'].includes(sqlType)) {
+                    csType = 'Guid';
+                }
+
+                if (colName.toUpperCase() !== 'PRIMARY' && colName.toUpperCase() !== 'CONSTRAINT' && colName.toUpperCase() !== 'FOREIGN') {
+                   columns.push({ name: colName, type: csType, sqlType: sqlType });
+                }
+            }
+        }
+    }
+} catch (err) {
+    console.error("Error reading SQL file:", err.message);
+    process.exit(1);
+}
+
+try {
+    let migrationContent = fs.readFileSync(migrationPath, 'utf8');
+
+    const upMethodRegex = /(protected\s+override\s+void\s+Up\s*\(\s*MigrationBuilder\s+migrationBuilder\s*\)\s*\{)/;
+    const downMethodRegex = /(protected\s+override\s+void\s+Down\s*\(\s*MigrationBuilder\s+migrationBuilder\s*\)\s*\{)/;
+
+    if (upMethodRegex.test(migrationContent) && downMethodRegex.test(migrationContent)) {
+        const safeSql = sqlContent.replace(/"/g, '""');
+
+        const upInjection = `\n            migrationBuilder.Sql(@"${safeSql}");`;
+        migrationContent = migrationContent.replace(upMethodRegex, `$1${upInjection}`);
+
+        const downInjection = `\n            migrationBuilder.DropTable("${tableName}");`;
+        migrationContent = migrationContent.replace(downMethodRegex, `$1${downInjection}`);
+
+        fs.writeFileSync(migrationPath, migrationContent, 'utf8');
+        console.log(`\x1b[32mSuccessfully modified migration:\x1b[0m ${migrationPath}`);
+    } else {
+        console.error("\x1b[31mCould not find Up or Down methods in the migration file.\x1b[0m");
+    }
+} catch (err) {
+    console.error("\x1b[31mError processing migration file:\x1b[0m", err.message);
+    process.exit(1);
+}
+
+function ensureDir(dir) {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+}
+
+const namespaceBase = path.basename(outDir); // e.g. MyProject.Data
+
+// Generate C# properties from columns
+const propertiesContent = columns.map(c => `        public ${c.type} ${c.name} { get; set; }`).join('\n');
+
+// 1. Models
+const modelsDir = path.join(outDir, 'Models');
+ensureDir(modelsDir);
+
+const entityFile = path.join(modelsDir, `${entityName}.cs`);
+const entityContent = `namespace ${namespaceBase}.Models
+{
+    public class ${entityName}
+    {
+${propertiesContent}
+    }
+}
+`;
+fs.writeFileSync(entityFile, entityContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${entityFile}`);
+
+const dbContextPartialFile = path.join(modelsDir, `AppDbContext.${entityName}.cs`);
+const dbContextPartialContent = `using Microsoft.EntityFrameworkCore;
+
+namespace ${namespaceBase}.Models
+{
+    public partial class AppDbContext
+    {
+        public DbSet<${entityName}> ${tableName} { get; set; }
+
+        partial void OnModelCreating${entityName}(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<${entityName}>(entity =>
+            {
+                entity.ToTable("${tableName}");
+                // Add Fluent API configurations here if necessary
+            });
+        }
+    }
+}
+`;
+fs.writeFileSync(dbContextPartialFile, dbContextPartialContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${dbContextPartialFile}`);
+
+// 2. Mappings
+const mappingsDir = path.join(outDir, 'Mappings');
+ensureDir(mappingsDir);
+
+const mappingProfileFile = path.join(mappingsDir, `${entityName}Profile.cs`);
+const mappingProfileContent = `using AutoMapper;
+using ${namespaceBase}.Models;
+using ${namespaceBase}.StandardData;
+
+namespace ${namespaceBase}.Mappings
+{
+    public class ${entityName}Profile : Profile
+    {
+        public ${entityName}Profile()
+        {
+            CreateMap<${entityName}, ${entityName}StandardData>();
+        }
+    }
+}
+`;
+fs.writeFileSync(mappingProfileFile, mappingProfileContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${mappingProfileFile}`);
+
+
+// 3. Domain
+const domainDir = path.join(outDir, 'Domain', featureName);
+ensureDir(domainDir);
+
+const resultFile = path.join(domainDir, `${featureName}Result.cs`);
+const resultContent = `namespace ${namespaceBase}.Domain.${featureName}
+{
+    public record ${featureName}Result
+    {
+        // Add calculation output properties here
+    }
+}
+`;
+fs.writeFileSync(resultFile, resultContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${resultFile}`);
+
+const logicServiceFile = path.join(domainDir, `${featureName}LogicService.cs`);
+const logicServiceContent = `using System.Collections.Generic;
+using ${namespaceBase}.Repositories.Databases;
+using ${namespaceBase}.StandardData;
+
+namespace ${namespaceBase}.Domain.${featureName}
+{
+    public class ${featureName}LogicService
+    {
+        private readonly IStandardDataRepository<I${entityName}StandardData> _repository;
+
+        public ${featureName}LogicService(IStandardDataRepository<I${entityName}StandardData> repository)
+        {
+            _repository = repository;
+        }
+
+        public ${featureName}Result Calculate()
+        {
+            // Calculation logic
+            return new ${featureName}Result();
+        }
+    }
+}
+`;
+fs.writeFileSync(logicServiceFile, logicServiceContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${logicServiceFile}`);
+
+
+// 4. StandardData
+const standardDataDir = path.join(outDir, 'StandardData');
+ensureDir(standardDataDir);
+
+const interfaceProps = columns.map(c => `        ${c.type} ${c.name} { get; }`).join('\n');
+const interfaceFile = path.join(standardDataDir, `I${entityName}StandardData.cs`);
+const interfaceContent = `namespace ${namespaceBase}.StandardData
+{
+    public interface I${entityName}StandardData
+    {
+${interfaceProps}
+    }
+}
+`;
+fs.writeFileSync(interfaceFile, interfaceContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${interfaceFile}`);
+
+const standardDataProps = columns.map(c => `        public ${c.type} ${c.name} { get; private set; }`).join('\n');
+const standardDataFile = path.join(standardDataDir, `${entityName}StandardData.cs`);
+const standardDataContent = `namespace ${namespaceBase}.StandardData
+{
+    public class ${entityName}StandardData : I${entityName}StandardData
+    {
+        private ${entityName}StandardData()
+        {
+        }
+
+${standardDataProps}
+    }
+}
+`;
+fs.writeFileSync(standardDataFile, standardDataContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${standardDataFile}`);
+
+// 5. Repositories
+const repositoriesDir = path.join(outDir, 'Repositories', 'Databases');
+ensureDir(repositoriesDir);
+
+const repositoryFile = path.join(repositoriesDir, `${entityName}StandardDataRepository.cs`);
+const repositoryContent = `using System.Collections.Generic;
+using System.Linq;
+using AutoMapper;
+using ${namespaceBase}.Models;
+using ${namespaceBase}.StandardData;
+
+namespace ${namespaceBase}.Repositories.Databases
+{
+    public interface IStandardDataRepository<T> : IReadOnlyCollection<T>
+    {
+    }
+
+    public class ${entityName}StandardDataRepository : IStandardDataRepository<I${entityName}StandardData>
+    {
+        private readonly AppDbContext _context;
+        private readonly IMapper _mapper;
+
+        public ${entityName}StandardDataRepository(AppDbContext context, IMapper mapper)
+        {
+            _context = context;
+            _mapper = mapper;
+        }
+
+        public IEnumerator<I${entityName}StandardData> GetEnumerator()
+        {
+            var data = _context.${tableName}.ToList();
+            var standardData = _mapper.Map<List<${entityName}StandardData>>(data);
+            return standardData.Cast<I${entityName}StandardData>().GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public int Count => _context.${tableName}.Count();
+    }
+}
+`;
+fs.writeFileSync(repositoryFile, repositoryContent, 'utf8');
+console.log(`\x1b[36mCreated:\x1b[0m ${repositoryFile}`);
+
+// Final summary
+console.log("\n\x1b[32m\x1b[1mScaffolding completed successfully!\x1b[0m\n");
