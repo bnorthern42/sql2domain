@@ -6,6 +6,7 @@ const args = process.argv.slice(2);
 let migrationPath = '';
 let sqlPath = '';
 let outDir = '';
+let configPath = 'parameters.json';
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--migration' && i + 1 < args.length) {
@@ -14,11 +15,32 @@ for (let i = 0; i < args.length; i++) {
         sqlPath = args[++i];
     } else if (args[i] === '--outdir' && i + 1 < args.length) {
         outDir = args[++i];
+    } else if (args[i] === '--config' && i + 1 < args.length) {
+        configPath = args[++i];
     }
 }
 
+let config = {
+    encapsulateNamespace: true,
+    copyright: ''
+};
+
+if (fs.existsSync(configPath)) {
+    try {
+        const configContent = fs.readFileSync(configPath, 'utf8');
+        const parsed = JSON.parse(configContent);
+        config = { ...config, ...parsed };
+    } catch (e) {
+        console.warn(`\x1b[33mWarning: Could not read or parse config file ${configPath}: ${e.message}\x1b[0m`);
+    }
+}
+
+migrationPath = migrationPath || config.migration || '';
+sqlPath = sqlPath || config.sql || '';
+outDir = outDir || config.outdir || config.projectDir || '';
+
 if (!migrationPath || !sqlPath || !outDir) {
-    console.error("Usage: sql2domain --migration <path> --sql <path> --outdir <path>");
+    console.error("Usage: sql2domain [--config parameters.json] --migration <path> --sql <path> --outdir <path>");
     process.exit(1);
 }
 
@@ -129,6 +151,17 @@ function ensureDir(dir) {
 
 const namespaceBase = path.basename(outDir); // e.g. MyProject.Data
 
+const copyrightHeader = config.copyright ? `${config.copyright}\n\n` : '';
+
+function wrapNamespace(namespaceName, content) {
+    const encapsulate = config.encapsulateNamespace !== false;
+    if (encapsulate) {
+        return `namespace ${namespaceName}\n{\n${content.split('\n').map(l => l ? '    ' + l : l).join('\n')}\n}\n`;
+    } else {
+        return `namespace ${namespaceName};\n\n${content}\n`;
+    }
+}
+
 // Generate C# properties from columns
 const propertiesContent = columns.map(c => `        public ${c.type} ${c.name} { get; set; }`).join('\n');
 
@@ -137,37 +170,29 @@ const modelsDir = path.join(outDir, 'Models');
 ensureDir(modelsDir);
 
 const entityFile = path.join(modelsDir, `${entityName}.cs`);
-const entityContent = `namespace ${namespaceBase}.Models
+const entityContentInner = `public class ${entityName}
 {
-    public class ${entityName}
-    {
-${propertiesContent}
-    }
-}
-`;
+${propertiesContent.replace(/^ {4}/gm, '')}
+}`;
+const entityContent = `${copyrightHeader}${wrapNamespace(`${namespaceBase}.Models`, entityContentInner)}`;
 fs.writeFileSync(entityFile, entityContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${entityFile}`);
 
 const dbContextPartialFile = path.join(modelsDir, `AppDbContext.${entityName}.cs`);
-const dbContextPartialContent = `using Microsoft.EntityFrameworkCore;
-
-namespace ${namespaceBase}.Models
+const dbContextPartialContentInner = `public partial class AppDbContext
 {
-    public partial class AppDbContext
-    {
-        public DbSet<${entityName}> ${tableName} { get; set; }
+    public DbSet<${entityName}> ${tableName} { get; set; }
 
-        partial void OnModelCreating${entityName}(ModelBuilder modelBuilder)
+    partial void OnModelCreating${entityName}(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<${entityName}>(entity =>
         {
-            modelBuilder.Entity<${entityName}>(entity =>
-            {
-                entity.ToTable("${tableName}");
-                // Add Fluent API configurations here if necessary
-            });
-        }
+            entity.ToTable("${tableName}");
+            // Add Fluent API configurations here if necessary
+        });
     }
-}
-`;
+}`;
+const dbContextPartialContent = `${copyrightHeader}using Microsoft.EntityFrameworkCore;\n\n${wrapNamespace(`${namespaceBase}.Models`, dbContextPartialContentInner)}`;
 fs.writeFileSync(dbContextPartialFile, dbContextPartialContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${dbContextPartialFile}`);
 
@@ -176,21 +201,14 @@ const mappingsDir = path.join(outDir, 'Mappings');
 ensureDir(mappingsDir);
 
 const mappingProfileFile = path.join(mappingsDir, `${entityName}Profile.cs`);
-const mappingProfileContent = `using AutoMapper;
-using ${namespaceBase}.Models;
-using ${namespaceBase}.StandardData;
-
-namespace ${namespaceBase}.Mappings
+const mappingProfileContentInner = `public class ${entityName}Profile : Profile
 {
-    public class ${entityName}Profile : Profile
+    public ${entityName}Profile()
     {
-        public ${entityName}Profile()
-        {
-            CreateMap<${entityName}, ${entityName}StandardData>();
-        }
+        CreateMap<${entityName}, ${entityName}StandardData>();
     }
-}
-`;
+}`;
+const mappingProfileContent = `${copyrightHeader}using AutoMapper;\nusing ${namespaceBase}.Models;\nusing ${namespaceBase}.StandardData;\n\n${wrapNamespace(`${namespaceBase}.Mappings`, mappingProfileContentInner)}`;
 fs.writeFileSync(mappingProfileFile, mappingProfileContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${mappingProfileFile}`);
 
@@ -200,41 +218,31 @@ const domainDir = path.join(outDir, 'Domain', featureName);
 ensureDir(domainDir);
 
 const resultFile = path.join(domainDir, `${featureName}Result.cs`);
-const resultContent = `namespace ${namespaceBase}.Domain.${featureName}
+const resultContentInner = `public record ${featureName}Result
 {
-    public record ${featureName}Result
-    {
-        // Add calculation output properties here
-    }
-}
-`;
+    // Add calculation output properties here
+}`;
+const resultContent = `${copyrightHeader}${wrapNamespace(`${namespaceBase}.Domain.${featureName}`, resultContentInner)}`;
 fs.writeFileSync(resultFile, resultContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${resultFile}`);
 
 const logicServiceFile = path.join(domainDir, `${featureName}LogicService.cs`);
-const logicServiceContent = `using System.Collections.Generic;
-using ${namespaceBase}.Repositories.Databases;
-using ${namespaceBase}.StandardData;
-
-namespace ${namespaceBase}.Domain.${featureName}
+const logicServiceContentInner = `public class ${featureName}LogicService
 {
-    public class ${featureName}LogicService
+    private readonly IStandardDataRepository<I${entityName}StandardData> _repository;
+
+    public ${featureName}LogicService(IStandardDataRepository<I${entityName}StandardData> repository)
     {
-        private readonly IStandardDataRepository<I${entityName}StandardData> _repository;
-
-        public ${featureName}LogicService(IStandardDataRepository<I${entityName}StandardData> repository)
-        {
-            _repository = repository;
-        }
-
-        public ${featureName}Result Calculate()
-        {
-            // Calculation logic
-            return new ${featureName}Result();
-        }
+        _repository = repository;
     }
-}
-`;
+
+    public ${featureName}Result Calculate()
+    {
+        // Calculation logic
+        return new ${featureName}Result();
+    }
+}`;
+const logicServiceContent = `${copyrightHeader}using System.Collections.Generic;\nusing ${namespaceBase}.Repositories.Databases;\nusing ${namespaceBase}.StandardData;\n\n${wrapNamespace(`${namespaceBase}.Domain.${featureName}`, logicServiceContentInner)}`;
 fs.writeFileSync(logicServiceFile, logicServiceContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${logicServiceFile}`);
 
@@ -245,31 +253,25 @@ ensureDir(standardDataDir);
 
 const interfaceProps = columns.map(c => `        ${c.type} ${c.name} { get; }`).join('\n');
 const interfaceFile = path.join(standardDataDir, `I${entityName}StandardData.cs`);
-const interfaceContent = `namespace ${namespaceBase}.StandardData
+const interfaceContentInner = `public interface I${entityName}StandardData
 {
-    public interface I${entityName}StandardData
-    {
-${interfaceProps}
-    }
-}
-`;
+${interfaceProps.replace(/^ {4}/gm, '')}
+}`;
+const interfaceContent = `${copyrightHeader}${wrapNamespace(`${namespaceBase}.StandardData`, interfaceContentInner)}`;
 fs.writeFileSync(interfaceFile, interfaceContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${interfaceFile}`);
 
 const standardDataProps = columns.map(c => `        public ${c.type} ${c.name} { get; private set; }`).join('\n');
 const standardDataFile = path.join(standardDataDir, `${entityName}StandardData.cs`);
-const standardDataContent = `namespace ${namespaceBase}.StandardData
+const standardDataContentInner = `public class ${entityName}StandardData : I${entityName}StandardData
 {
-    public class ${entityName}StandardData : I${entityName}StandardData
+    private ${entityName}StandardData()
     {
-        private ${entityName}StandardData()
-        {
-        }
-
-${standardDataProps}
     }
-}
-`;
+
+${standardDataProps.replace(/^ {4}/gm, '')}
+}`;
+const standardDataContent = `${copyrightHeader}${wrapNamespace(`${namespaceBase}.StandardData`, standardDataContentInner)}`;
 fs.writeFileSync(standardDataFile, standardDataContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${standardDataFile}`);
 
@@ -278,42 +280,33 @@ const repositoriesDir = path.join(outDir, 'Repositories', 'Databases');
 ensureDir(repositoriesDir);
 
 const repositoryFile = path.join(repositoriesDir, `${entityName}StandardDataRepository.cs`);
-const repositoryContent = `using System.Collections.Generic;
-using System.Linq;
-using AutoMapper;
-using ${namespaceBase}.Models;
-using ${namespaceBase}.StandardData;
-
-namespace ${namespaceBase}.Repositories.Databases
+const repositoryContentInner = `public interface IStandardDataRepository<T> : IReadOnlyCollection<T>
 {
-    public interface IStandardDataRepository<T> : IReadOnlyCollection<T>
-    {
-    }
-
-    public class ${entityName}StandardDataRepository : IStandardDataRepository<I${entityName}StandardData>
-    {
-        private readonly AppDbContext _context;
-        private readonly IMapper _mapper;
-
-        public ${entityName}StandardDataRepository(AppDbContext context, IMapper mapper)
-        {
-            _context = context;
-            _mapper = mapper;
-        }
-
-        public IEnumerator<I${entityName}StandardData> GetEnumerator()
-        {
-            var data = _context.${tableName}.ToList();
-            var standardData = _mapper.Map<List<${entityName}StandardData>>(data);
-            return standardData.Cast<I${entityName}StandardData>().GetEnumerator();
-        }
-
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
-
-        public int Count => _context.${tableName}.Count();
-    }
 }
-`;
+
+public class ${entityName}StandardDataRepository : IStandardDataRepository<I${entityName}StandardData>
+{
+    private readonly AppDbContext _context;
+    private readonly IMapper _mapper;
+
+    public ${entityName}StandardDataRepository(AppDbContext context, IMapper mapper)
+    {
+        _context = context;
+        _mapper = mapper;
+    }
+
+    public IEnumerator<I${entityName}StandardData> GetEnumerator()
+    {
+        var data = _context.${tableName}.ToList();
+        var standardData = _mapper.Map<List<${entityName}StandardData>>(data);
+        return standardData.Cast<I${entityName}StandardData>().GetEnumerator();
+    }
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public int Count => _context.${tableName}.Count();
+}`;
+const repositoryContent = `${copyrightHeader}using System.Collections.Generic;\nusing System.Linq;\nusing AutoMapper;\nusing ${namespaceBase}.Models;\nusing ${namespaceBase}.StandardData;\n\n${wrapNamespace(`${namespaceBase}.Repositories.Databases`, repositoryContentInner)}`;
 fs.writeFileSync(repositoryFile, repositoryContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${repositoryFile}`);
 
