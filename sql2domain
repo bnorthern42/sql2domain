@@ -7,14 +7,20 @@ let migrationPath = '';
 let sqlPath = '';
 let outDir = '';
 let configPath = 'parameters.json';
+let noMigration = false;
+let contextName = '';
 
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--migration' && i + 1 < args.length) {
         migrationPath = args[++i];
+    } else if (args[i] === '--no-migration') {
+        noMigration = true;
     } else if (args[i] === '--sql' && i + 1 < args.length) {
         sqlPath = args[++i];
     } else if (args[i] === '--outdir' && i + 1 < args.length) {
         outDir = args[++i];
+    } else if (args[i] === '--context' && i + 1 < args.length) {
+        contextName = args[++i];
     } else if (args[i] === '--config' && i + 1 < args.length) {
         configPath = args[++i];
     }
@@ -38,9 +44,13 @@ if (fs.existsSync(configPath)) {
 migrationPath = migrationPath || config.migration || '';
 sqlPath = sqlPath || config.sql || '';
 outDir = outDir || config.outdir || config.projectDir || '';
+contextName = contextName || config.context || 'AppDbContext';
+if (config.noMigration) {
+    noMigration = true;
+}
 
-if (!migrationPath || !sqlPath || !outDir) {
-    console.error("Usage: sql2domain [--config parameters.json] --migration <path> --sql <path> --outdir <path>");
+if (!sqlPath || !outDir || (!migrationPath && !noMigration)) {
+    console.error("Usage: sql2domain [--config parameters.json] [--no-migration | --migration <path>] --sql <path> --outdir <path> [--context <name>]");
     process.exit(1);
 }
 
@@ -118,29 +128,31 @@ try {
     process.exit(1);
 }
 
-try {
-    let migrationContent = fs.readFileSync(migrationPath, 'utf8');
-    
-    const upMethodRegex = /(protected\s+override\s+void\s+Up\s*\(\s*MigrationBuilder\s+migrationBuilder\s*\)\s*\{)/;
-    const downMethodRegex = /(protected\s+override\s+void\s+Down\s*\(\s*MigrationBuilder\s+migrationBuilder\s*\)\s*\{)/;
-    
-    if (upMethodRegex.test(migrationContent) && downMethodRegex.test(migrationContent)) {
-        const safeSql = sqlContent.replace(/"/g, '""');
+if (!noMigration && migrationPath) {
+    try {
+        let migrationContent = fs.readFileSync(migrationPath, 'utf8');
         
-        const upInjection = `\n            migrationBuilder.Sql(@"${safeSql}");`;
-        migrationContent = migrationContent.replace(upMethodRegex, `$1${upInjection}`);
+        const upMethodRegex = /(protected\s+override\s+void\s+Up\s*\(\s*MigrationBuilder\s+migrationBuilder\s*\)\s*\{)/;
+        const downMethodRegex = /(protected\s+override\s+void\s+Down\s*\(\s*MigrationBuilder\s+migrationBuilder\s*\)\s*\{)/;
         
-        const downInjection = `\n            migrationBuilder.DropTable("${tableName}");`;
-        migrationContent = migrationContent.replace(downMethodRegex, `$1${downInjection}`);
-        
-        fs.writeFileSync(migrationPath, migrationContent, 'utf8');
-        console.log(`\x1b[32mSuccessfully modified migration:\x1b[0m ${migrationPath}`);
-    } else {
-        console.error("\x1b[31mCould not find Up or Down methods in the migration file.\x1b[0m");
+        if (upMethodRegex.test(migrationContent) && downMethodRegex.test(migrationContent)) {
+            const safeSql = sqlContent.replace(/"/g, '""');
+            
+            const upInjection = `\n            migrationBuilder.Sql(@"${safeSql}");`;
+            migrationContent = migrationContent.replace(upMethodRegex, `$1${upInjection}`);
+            
+            const downInjection = `\n            migrationBuilder.DropTable("${tableName}");`;
+            migrationContent = migrationContent.replace(downMethodRegex, `$1${downInjection}`);
+            
+            fs.writeFileSync(migrationPath, migrationContent, 'utf8');
+            console.log(`\x1b[32mSuccessfully modified migration:\x1b[0m ${migrationPath}`);
+        } else {
+            console.error("\x1b[31mCould not find Up or Down methods in the migration file.\x1b[0m");
+        }
+    } catch (err) {
+        console.error("\x1b[31mError processing migration file:\x1b[0m", err.message);
+        process.exit(1);
     }
-} catch (err) {
-    console.error("\x1b[31mError processing migration file:\x1b[0m", err.message);
-    process.exit(1);
 }
 
 function ensureDir(dir) {
@@ -178,8 +190,8 @@ const entityContent = `${copyrightHeader}${wrapNamespace(`${namespaceBase}.Model
 fs.writeFileSync(entityFile, entityContent, 'utf8');
 console.log(`\x1b[36mCreated:\x1b[0m ${entityFile}`);
 
-const dbContextPartialFile = path.join(modelsDir, `AppDbContext.${entityName}.cs`);
-const dbContextPartialContentInner = `public partial class AppDbContext
+const dbContextPartialFile = path.join(modelsDir, `${contextName}.${entityName}.cs`);
+const dbContextPartialContentInner = `public partial class ${contextName}
 {
     public DbSet<${entityName}> ${tableName} { get; set; }
 
@@ -220,7 +232,7 @@ ensureDir(domainDir);
 const resultFile = path.join(domainDir, `${featureName}Result.cs`);
 const resultContentInner = `public record ${featureName}Result
 {
-    // Add calculation output properties here
+    // Add domain result properties here
 }`;
 const resultContent = `${copyrightHeader}${wrapNamespace(`${namespaceBase}.Domain.${featureName}`, resultContentInner)}`;
 fs.writeFileSync(resultFile, resultContent, 'utf8');
@@ -236,9 +248,9 @@ const logicServiceContentInner = `public class ${featureName}LogicService
         _repository = repository;
     }
 
-    public ${featureName}Result Calculate()
+    public ${featureName}Result Execute()
     {
-        // Calculation logic
+        // Business logic
         return new ${featureName}Result();
     }
 }`;
@@ -286,10 +298,10 @@ const repositoryContentInner = `public interface IStandardDataRepository<T> : IR
 
 public class ${entityName}StandardDataRepository : IStandardDataRepository<I${entityName}StandardData>
 {
-    private readonly AppDbContext _context;
+    private readonly ${contextName} _context;
     private readonly IMapper _mapper;
 
-    public ${entityName}StandardDataRepository(AppDbContext context, IMapper mapper)
+    public ${entityName}StandardDataRepository(${contextName} context, IMapper mapper)
     {
         _context = context;
         _mapper = mapper;
