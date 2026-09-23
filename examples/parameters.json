@@ -1,0 +1,7 @@
+{
+  "sql": "examples/dogs.sql",
+  "outdir": "examples/output",
+  "context": "AppDbContext",
+  "encapsulateNamespace": true,
+  "copyright": "// Copyright (c) Example. All rights reserved."
+}
