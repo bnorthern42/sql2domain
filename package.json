@@ -1,0 +1,27 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "description": "A toolkit to scaffold C# Domain-Driven Design (DDD) structures and manage Entity Framework Core migrations from raw SQL table definitions.",
+  "main": "index.js",
+  "directories": {
+    "example": "examples"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bnorthern42/sql2domain.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/bnorthern42/sql2domain/issues"
+  },
+  "homepage": "https://github.com/bnorthern42/sql2domain#readme",
+  "devDependencies": {
+    "jest": "^30.5.2"
+  }
+}

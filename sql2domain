@@ -31,6 +31,24 @@ let config = {
     copyright: ''
 };
 
+function wrapNamespace(namespaceName, content) {
+    const encapsulate = config.encapsulateNamespace !== false;
+    if (encapsulate) {
+        return `namespace ${namespaceName}\n{\n${content.split('\n').map(l => l ? '    ' + l : l).join('\n')}\n}\n`;
+    } else {
+        return `namespace ${namespaceName};\n\n${content}\n`;
+    }
+}
+
+if (require.main !== module) {
+    module.exports = {
+        wrapNamespace,
+        setConfig: (newConfig) => { config = { ...config, ...newConfig }; }
+    };
+} else {
+
+
+
 if (fs.existsSync(configPath)) {
     try {
         const configContent = fs.readFileSync(configPath, 'utf8');
@@ -172,14 +190,6 @@ const namespaceBase = path.basename(outDir); // e.g. MyProject.Data
 
 const copyrightHeader = config.copyright ? `${config.copyright}\n\n` : '';
 
-function wrapNamespace(namespaceName, content) {
-    const encapsulate = config.encapsulateNamespace !== false;
-    if (encapsulate) {
-        return `namespace ${namespaceName}\n{\n${content.split('\n').map(l => l ? '    ' + l : l).join('\n')}\n}\n`;
-    } else {
-        return `namespace ${namespaceName};\n\n${content}\n`;
-    }
-}
 
 // Generate C# properties from columns
 const propertiesContent = columns.map(c => `        public ${c.type} ${c.name} { get; set; }`).join('\n');
@@ -331,3 +341,5 @@ console.log(`\x1b[36mCreated:\x1b[0m ${repositoryFile}`);
 
 // Final summary
 console.log("\n\x1b[32m\x1b[1mScaffolding completed successfully!\x1b[0m\n");
+
+}
