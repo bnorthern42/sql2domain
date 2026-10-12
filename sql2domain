@@ -73,10 +73,10 @@ try {
     tableName = tableMatch[1];
     
     entityName = tableName;
-    if (entityName.endsWith('s')) {
-        entityName = entityName.slice(0, -1);
-    } else if (entityName.endsWith('ies')) {
+    if (entityName.endsWith('ies')) {
         entityName = entityName.slice(0, -3) + 'y';
+    } else if (entityName.endsWith('s')) {
+        entityName = entityName.slice(0, -1);
     }
     
     featureName = entityName;
