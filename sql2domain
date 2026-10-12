@@ -91,6 +91,13 @@ try {
     const createTableBodyMatch = sqlContent.match(/CREATE\s+TABLE\s+\[?[\w]+\]?\s*\(([\s\S]*?)\)\s*;/i);
     
     if (createTableBodyMatch) {
+        const intTypes = new Set(['INT', 'BIGINT', 'SMALLINT', 'TINYINT']);
+        const bitTypes = new Set(['BIT']);
+        const decimalTypes = new Set(['DECIMAL', 'NUMERIC', 'MONEY']);
+        const floatTypes = new Set(['FLOAT', 'REAL']);
+        const dateTypes = new Set(['DATE', 'DATETIME', 'DATETIME2', 'SMALLDATETIME']);
+        const guidTypes = new Set(['UNIQUEIDENTIFIER']);
+
         const bodyLines = createTableBodyMatch[1].split(',').map(line => line.trim()).filter(line => line.length > 0);
         for (let line of bodyLines) {
             const colRegex = /^\[?([\w]+)\]?\s+([\w]+)(?:\(.*?\))?/i;
@@ -100,20 +107,20 @@ try {
                 const sqlType = colMatch[2].toUpperCase();
                 
                 let csType = 'string';
-                if (['INT', 'BIGINT', 'SMALLINT', 'TINYINT'].includes(sqlType)) {
+                if (intTypes.has(sqlType)) {
                     csType = 'int';
                     if (sqlType === 'BIGINT') csType = 'long';
                     if (sqlType === 'SMALLINT') csType = 'short';
                     if (sqlType === 'TINYINT') csType = 'byte';
-                } else if (['BIT'].includes(sqlType)) {
+                } else if (bitTypes.has(sqlType)) {
                     csType = 'bool';
-                } else if (['DECIMAL', 'NUMERIC', 'MONEY'].includes(sqlType)) {
+                } else if (decimalTypes.has(sqlType)) {
                     csType = 'decimal';
-                } else if (['FLOAT', 'REAL'].includes(sqlType)) {
+                } else if (floatTypes.has(sqlType)) {
                     csType = 'double';
-                } else if (['DATE', 'DATETIME', 'DATETIME2', 'SMALLDATETIME'].includes(sqlType)) {
+                } else if (dateTypes.has(sqlType)) {
                     csType = 'DateTime';
-                } else if (['UNIQUEIDENTIFIER'].includes(sqlType)) {
+                } else if (guidTypes.has(sqlType)) {
                     csType = 'Guid';
                 }
                 
