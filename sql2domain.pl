@@ -341,6 +341,7 @@ public class ${entity_name}StandardDataRepository : IStandardDataRepository<I${e
 {
     private readonly $context_name _context;
     private readonly IMapper _mapper;
+    private List<${entity_name}StandardData>? _cachedData;
 
     public ${entity_name}StandardDataRepository($context_name context, IMapper mapper)
     {
@@ -350,14 +351,17 @@ public class ${entity_name}StandardDataRepository : IStandardDataRepository<I${e
 
     public IEnumerator<I${entity_name}StandardData> GetEnumerator()
     {
-        var data = _context.$table_name.ToList();
-        var standardData = _mapper.Map<List<${entity_name}StandardData>>(data);
-        return standardData.Cast<I${entity_name}StandardData>().GetEnumerator();
+        if (_cachedData == null)
+        {
+            var data = _context.$table_name.ToList();
+            _cachedData = _mapper.Map<List<${entity_name}StandardData>>(data);
+        }
+        return _cachedData.Cast<I${entity_name}StandardData>().GetEnumerator();
     }
 
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 
-    public int Count => _context.$table_name.Count();
+    public int Count => _cachedData?.Count ?? _context.$table_name.Count();
 }
 EOF
 chomp $repository_content_inner;
