@@ -307,6 +307,7 @@ public class ${entityName}StandardDataRepository : IStandardDataRepository<I${en
 {
     private readonly ${contextName} _context;
     private readonly IMapper _mapper;
+    private List<${entityName}StandardData>? _cachedData;
 
     public ${entityName}StandardDataRepository(${contextName} context, IMapper mapper)
     {
@@ -316,14 +317,17 @@ public class ${entityName}StandardDataRepository : IStandardDataRepository<I${en
 
     public IEnumerator<I${entityName}StandardData> GetEnumerator()
     {
-        var data = _context.${tableName}.ToList();
-        var standardData = _mapper.Map<List<${entityName}StandardData>>(data);
-        return standardData.Cast<I${entityName}StandardData>().GetEnumerator();
+        if (_cachedData == null)
+        {
+            var data = _context.${tableName}.ToList();
+            _cachedData = _mapper.Map<List<${entityName}StandardData>>(data);
+        }
+        return _cachedData.Cast<I${entityName}StandardData>().GetEnumerator();
     }
 
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 
-    public int Count => _context.${tableName}.Count();
+    public int Count => _cachedData?.Count ?? _context.${tableName}.Count();
 }`;
 const repositoryContent = `${copyrightHeader}using System.Collections.Generic;\nusing System.Linq;\nusing AutoMapper;\nusing ${namespaceBase}.Models;\nusing ${namespaceBase}.StandardData;\n\n${wrapNamespace(`${namespaceBase}.Repositories.Databases`, repositoryContentInner)}`;
 fs.writeFileSync(repositoryFile, repositoryContent, 'utf8');
