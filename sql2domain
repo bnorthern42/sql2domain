@@ -92,8 +92,8 @@ try {
     
     if (createTableBodyMatch) {
         const bodyLines = createTableBodyMatch[1].split(',').map(line => line.trim()).filter(line => line.length > 0);
+        const colRegex = /^\[?([\w]+)\]?\s+([\w]+)(?:\(.*?\))?/i;
         for (let line of bodyLines) {
-            const colRegex = /^\[?([\w]+)\]?\s+([\w]+)(?:\(.*?\))?/i;
             const colMatch = line.match(colRegex);
             if (colMatch) {
                 const colName = colMatch[1];
